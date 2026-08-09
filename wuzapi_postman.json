@@ -1201,6 +1201,28 @@
             },
             "response": []
           },
+          {
+            "name": "Send Carousel - Serviços",
+            "request": {
+              "method": "POST",
+              "header": [
+                { "key": "token", "value": "{{token}}" },
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": {
+                "mode": "raw",
+                "raw": "{\n  \"Phone\": \"5511999999999\",\n  \"Body\": \"Confira nossos servicos:\",\n  \"Cards\": [\n    {\n      \"Body\": \"Corte feminino - R$ 80,00\",\n      \"Image\": \"https://example.com/corte.jpg\",\n      \"Buttons\": [\n        { \"type\": \"reply\", \"title\": \"Agendar\", \"id\": \"service-corte\" }\n      ]\n    },\n    {\n      \"Body\": \"Hidratacao - R$ 60,00\",\n      \"Image\": \"https://example.com/hidratacao.jpg\",\n      \"Buttons\": [\n        { \"type\": \"reply\", \"title\": \"Agendar\", \"id\": \"service-hidratacao\" }\n      ]\n    }\n  ]\n}",
+                "options": { "raw": { "language": "json" } }
+              },
+              "url": {
+                "raw": "{{baseUrl}}/chat/send/carousel",
+                "host": ["{{baseUrl}}"],
+                "path": ["chat", "send", "carousel"]
+              },
+              "description": "Carrossel horizontal com 2 a 10 cards. Cada card exige texto, imagem HTTP(S)/data:image e 1 ou 2 botoes. Tambem aceita o payload legado number/text/carousel do UAZAPI."
+            },
+            "response": []
+          },
         {
           "name": "Send Poll",
           "request": {
