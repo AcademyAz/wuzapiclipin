@@ -1550,6 +1550,27 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  /chat/send/carousel:
+    post:
+      tags:
+        - Chat
+      summary: Sends an interactive image carousel
+      description: Sends 2 to 10 horizontal image cards. Each card requires body text, an image and 1 or 2 NativeFlow buttons.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/MessageCarousel'
+      responses:
+        200:
+          description: Response
+          content:
+            application/json:
+              schema:
+                example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":1786223590},"success":true}
   /chat/send/poll:
     post:
       tags:
@@ -2770,6 +2791,83 @@ definitions:
         required:
           - StanzaID
           - Participant
+        properties:
+          StanzaID:
+            type: string
+            example: "3EB06F9067F80BAB89FF"
+          Participant:
+            type: string
+            example: "5491155553935@s.whatsapp.net"
+
+  MessageCarousel:
+    type: object
+    required:
+      - Phone
+      - Cards
+    properties:
+      Phone:
+        type: string
+        example: "5521971532700"
+      Body:
+        type: string
+        example: "Confira nossos serviços:"
+      Footer:
+        type: string
+        example: "Escolha uma opção"
+      Id:
+        type: string
+        example: "ABCDABCD1234"
+      Cards:
+        type: array
+        minItems: 2
+        maxItems: 10
+        items:
+          type: object
+          required:
+            - Body
+            - Image
+            - Buttons
+          properties:
+            Body:
+              type: string
+              example: "Corte feminino - R$ 80,00"
+            Image:
+              type: string
+              description: HTTP(S) URL or data:image URL
+              example: "https://example.com/service.jpg"
+            Footer:
+              type: string
+              example: "Duração: 60 minutos"
+            Buttons:
+              type: array
+              minItems: 1
+              maxItems: 2
+              items:
+                type: object
+                required:
+                  - type
+                  - title
+                properties:
+                  type:
+                    type: string
+                    example: "reply" # reply | url | call | copy
+                  title:
+                    type: string
+                    example: "Agendar"
+                  id:
+                    type: string
+                    example: "service-123"
+                  url:
+                    type: string
+                    example: "https://example.com/service"
+                  phone_number:
+                    type: string
+                    example: "+5511999999999"
+                  copy_code:
+                    type: string
+                    example: "PROMO2024"
+      ContextInfo:
+        type: object
         properties:
           StanzaID:
             type: string

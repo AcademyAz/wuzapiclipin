@@ -322,6 +322,9 @@ func (ss *stdioServer) routeRequest(req *jsonRpcRequest) {
 	case "chat.send.list":
 		httpMethod = "POST"
 		httpPath = "/chat/send/list"
+	case "chat.send.carousel":
+		httpMethod = "POST"
+		httpPath = "/chat/send/carousel"
 	case "chat.send.edit":
 		httpMethod = "POST"
 		httpPath = "/chat/send/edit"
