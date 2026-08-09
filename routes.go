@@ -127,6 +127,7 @@ func (s *server) routes() {
 	s.router.Handle("/chat/archive", c.Then(s.ArchiveChat())).Methods("POST")
 
 	s.router.Handle("/status/set/text", c.Then(s.SetStatusMessage())).Methods("POST")
+	s.router.Handle("/status/send", c.Then(s.SendStatus())).Methods("POST")
 
 	s.router.Handle("/call/reject", c.Then(s.RejectCall())).Methods("POST")
 

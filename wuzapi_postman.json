@@ -1483,6 +1483,27 @@
             "description": "Set status text message"
           },
           "response": []
+        },
+        {
+          "name": "Send Image Status",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "token", "value": "{{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"image\",\n  \"file\": \"https://example.com/status.png\",\n  \"text\": \"Agende seu horário pelo nosso link.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/status/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["status", "send"]
+            },
+            "description": "Publish an ephemeral image status (story). Audience follows WhatsApp privacy settings."
+          },
+          "response": []
         }
       ]
     },
