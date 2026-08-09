@@ -1831,6 +1831,32 @@ paths:
               schema:
                 example: {"code":200,"data":{"Details":"Set"},"success":true}
 
+  /status/send:
+    post:
+      tags:
+        - Status
+      summary: Send WhatsApp status (story)
+      description: Publishes an ephemeral WhatsApp status. Currently supports image status with an optional caption. The audience follows the privacy settings configured in WhatsApp.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/StatusSend'
+      responses:
+        200:
+          description: Status published successfully
+          content:
+            application/json:
+              schema:
+                example: {"code":200,"data":{"Details":"Sent","Id":"3EB0123456789","Timestamp":1786223590,"Type":"image"},"success":true}
+        400:
+          description: Invalid type, image source, MIME type, or payload
+        500:
+          description: Session, upload, or WhatsApp delivery error
+
   /call/reject:
     post:
       tags:
@@ -2550,6 +2576,32 @@ definitions:
       body:
         type: string
         example: Hi
+  StatusSend:
+    type: object
+    required:
+      - type
+      - file
+    properties:
+      type:
+        type: string
+        enum:
+          - image
+        example: image
+      file:
+        type: string
+        description: HTTP(S) URL or data:image URL containing the image.
+        example: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB
+      text:
+        type: string
+        description: Optional image caption.
+        example: Agende seu horário pelo nosso link.
+      id:
+        type: string
+        description: Optional custom WhatsApp message ID.
+      mimetype:
+        type: string
+        description: Optional declared image MIME type. When provided, it must match the detected file content.
+        example: image/png
   UserPresence:
     type: object
     required:

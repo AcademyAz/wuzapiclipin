@@ -406,6 +406,9 @@ func (ss *stdioServer) routeRequest(req *jsonRpcRequest) {
 	case "status.set.text":
 		httpMethod = "POST"
 		httpPath = "/status/set/text"
+	case "status.send":
+		httpMethod = "POST"
+		httpPath = "/status/send"
 
 	// Calls
 	case "call.reject":
