@@ -1529,6 +1529,27 @@ paths:
             application/json:
               schema:
                 example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":"2022-04-20T12:49:08-03:00"},"success":true}
+  /chat/send/request-payment:
+    post:
+      tags:
+        - Chat
+      summary: Sends a native payment request
+      description: Sends a WhatsApp order_details message with PIX, boleto and/or an approved HTTPS payment link. The compatibility alias /send/request-payment is also available.
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/definitions/MessageRequestPayment'
+      responses:
+        200:
+          description: Payment request sent
+          content:
+            application/json:
+              schema:
+                example: {"code":200,"data":{"Details":"Sent","Id":"90B2F8B13FAC8A9CF6B06E99C7834DC5","Timestamp":1775941200},"success":true}
   /chat/send/list:
     post:
       tags:
@@ -2927,6 +2948,80 @@ definitions:
           Participant:
             type: string
             example: "5491155553935@s.whatsapp.net"
+
+  MessageRequestPayment:
+    type: object
+    required:
+      - number
+      - itemName
+      - amount
+    properties:
+      number:
+        type: string
+        example: "5511999999999"
+      title:
+        type: string
+        example: "Detalhes da cobrança"
+      text:
+        type: string
+        example: "Pedido pronto para pagamento"
+      footer:
+        type: string
+        example: "Clipin"
+      itemName:
+        type: string
+        maxLength: 60
+        example: "Assinatura Plano Ouro"
+      invoiceNumber:
+        type: string
+        maxLength: 60
+        pattern: '^[A-Za-z0-9_.-]+$'
+        example: "PAY-123"
+      amount:
+        type: number
+        format: double
+        minimum: 0.01
+        example: 199.9
+      currency:
+        type: string
+        enum: [BRL]
+        default: BRL
+      pixKey:
+        type: string
+        description: PIX key shown to the payer.
+        example: "123e4567-e89b-12d3-a456-426614174000"
+      pixCode:
+        type: string
+        description: Optional dynamic PIX copy-and-paste payload. Requires pixKey.
+        example: "00020101021226890014BR.GOV.BCB.PIX..."
+      pixType:
+        type: string
+        enum: [CPF, CNPJ, PHONE, EMAIL, EVP]
+        default: EVP
+      pixName:
+        type: string
+        description: Merchant name displayed in the PIX flow.
+        example: "Clipin"
+      boletoCode:
+        type: string
+        description: Boleto digitable line; punctuation and spaces are normalized.
+        example: "34191.79001 01043.510047 91020.150008 5 91070026000"
+      paymentLink:
+        type: string
+        format: uri
+        description: HTTPS checkout URL. WhatsApp only renders approved domains.
+        example: "https://pay.example.com/checkout/PAY-123"
+      fileUrl:
+        type: string
+        description: Optional HTTP(S) or data URL for a document displayed in the message header.
+        example: "https://cdn.example.com/PAY-123.pdf"
+      fileName:
+        type: string
+        default: "cobranca.pdf"
+      id:
+        type: string
+        description: Optional WhatsApp message ID.
+        example: "3EB06F9067F80BAB89FF"
 
   MessageText:
     type: object
