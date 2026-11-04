@@ -189,7 +189,7 @@ func normalizePaymentPayload(payload *requestPaymentPayload, messageID string) e
 	return nil
 }
 
-func buildRequestPaymentParams(payload requestPaymentPayload) requestPaymentParams {
+func buildRequestPaymentParams(payload *requestPaymentPayload) requestPaymentParams {
 	amount := paymentAmount{Value: int64(math.Round(payload.Amount * 100)), Offset: paymentAmountOffset}
 	settings := make([]paymentSetting, 0, 3)
 
@@ -243,7 +243,7 @@ func buildRequestPaymentParams(payload requestPaymentPayload) requestPaymentPara
 	}
 }
 
-func buildPaymentDocument(ctx context.Context, client *whatsmeow.Client, payload requestPaymentPayload) (*waE2E.DocumentMessage, error) {
+func buildPaymentDocument(ctx context.Context, client *whatsmeow.Client, payload *requestPaymentPayload) (*waE2E.DocumentMessage, error) {
 	if payload.FileURL == "" {
 		return nil, nil
 	}
@@ -319,7 +319,7 @@ func (s *server) SendRequestPayment() http.HandlerFunc {
 			return
 		}
 
-		paramsJSON, err := json.Marshal(buildRequestPaymentParams(payload))
+		paramsJSON, err := json.Marshal(buildRequestPaymentParams(&payload))
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("could not encode payment parameters: %w", err))
 			return
@@ -342,7 +342,7 @@ func (s *server) SendRequestPayment() http.HandlerFunc {
 		if payload.Title != "" {
 			header.Title = proto.String(payload.Title)
 		}
-		document, err := buildPaymentDocument(r.Context(), client, payload)
+		document, err := buildPaymentDocument(r.Context(), client, &payload)
 		if err != nil {
 			s.Respond(w, r, http.StatusBadRequest, err)
 			return

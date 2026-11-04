@@ -2710,7 +2710,7 @@ func (s *server) SetStatusMessage() http.HandlerFunc {
 
 		msg := proto.String(t.Body)
 
-		err = clientManager.GetWhatsmeowClient(txtid).SetStatusMessage(context.Background(), *msg)
+		err = clientManager.GetWhatsmeowClient(txtid).SetStatusMessage(context.Background(), types.SetStatusInput{Text: msg})
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, errors.New(fmt.Sprintf("error sending status message: %v", err)))
 			return
@@ -3783,8 +3783,12 @@ func (s *server) updateUserBlocklist(action events.BlocklistChangeAction) http.H
 
 		blockedJIDs := make([]string, 0)
 		if blocklist != nil {
-			blockedJIDs = make([]string, 0, len(blocklist.JIDs))
-			for _, blockedJID := range blocklist.JIDs {
+			blockedJIDs = make([]string, 0, len(blocklist.Items))
+			for _, item := range blocklist.Items {
+				blockedJID := item.PN
+				if blockedJID.IsEmpty() {
+					blockedJID = item.LID
+				}
 				blockedJIDs = append(blockedJIDs, blockedJID.String())
 			}
 		}
@@ -3830,7 +3834,7 @@ func updateBlocklistWithResolvedJID(ctx context.Context, client *whatsmeow.Clien
 		return jid, nil, err
 	}
 
-	blocklist, err := client.UpdateBlocklist(ctx, blocklistJID, action)
+	blocklist, err := client.UpdateBlocklist(ctx, blocklistJID, action, "")
 	return blocklistJID, blocklist, err
 }
 
@@ -3879,8 +3883,12 @@ func formatBlocklist(blocklist *types.Blocklist) map[string]interface{} {
 	jids := []string{}
 	dhash := ""
 	if blocklist != nil {
-		jids = make([]string, len(blocklist.JIDs))
-		for i, blockedJID := range blocklist.JIDs {
+		jids = make([]string, len(blocklist.Items))
+		for i, item := range blocklist.Items {
+			blockedJID := item.PN
+			if blockedJID.IsEmpty() {
+				blockedJID = item.LID
+			}
 			jids[i] = blockedJID.String()
 		}
 		dhash = blocklist.DHash
@@ -3904,7 +3912,7 @@ func (s *server) GetBlocklist() http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 
-		blocklist, err := client.GetBlocklist(ctx)
+		blocklist, err := client.GetBlocklist(ctx, "")
 		if err != nil {
 			s.Respond(w, r, http.StatusInternalServerError, fmt.Errorf("failed to get blocklist: %w", err))
 			return

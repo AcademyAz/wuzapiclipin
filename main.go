@@ -82,7 +82,7 @@ var (
 
 var privateIPBlocks []*net.IPNet
 
-const version = "1.0.7"
+const version = "1.0.7-clipin.1"
 
 // killchannel maps a userID to its session goroutine's kill channel. It is
 // accessed from HTTP request goroutines (Connect/Disconnect/logout/delete) and
