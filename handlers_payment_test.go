@@ -31,7 +31,7 @@ func TestNormalizePaymentPayloadDefaultsAndStaticPIX(t *testing.T) {
 		t.Fatalf("expected EVP, got %q", payload.PixType)
 	}
 
-	params := buildRequestPaymentParams(payload)
+	params := buildRequestPaymentParams(&payload)
 	if params.TotalAmount.Value != 10990 || params.TotalAmount.Offset != 100 {
 		t.Fatalf("unexpected total amount: %+v", params.TotalAmount)
 	}
@@ -61,7 +61,7 @@ func TestBuildRequestPaymentParamsWithAllMethods(t *testing.T) {
 	if err := normalizePaymentPayload(&payload, "GENERATED-ID"); err != nil {
 		t.Fatalf("normalizePaymentPayload returned error: %v", err)
 	}
-	params := buildRequestPaymentParams(payload)
+	params := buildRequestPaymentParams(&payload)
 	if len(params.PaymentSettings) != 3 {
 		t.Fatalf("expected 3 payment settings, got %+v", params.PaymentSettings)
 	}

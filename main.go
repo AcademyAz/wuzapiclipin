@@ -88,7 +88,7 @@ var (
 
 var privateIPBlocks []*net.IPNet
 
-const version = "1.0.9"
+const version = "1.1.0-clipin.1"
 
 func parseAutomaticPresence(value string) (types.Presence, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
