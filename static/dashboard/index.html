@@ -98,10 +98,43 @@
             <th>Name</th>
             <th>Connected</th>
             <th>Logged In</th>
+            <th>Proxy</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="instances-body"></tbody>
+      </table>
+    </div>
+
+    <!-- Proxy Pool -->
+    <div class="ui stackable grid" id="proxyPoolSection">
+      <div class="row">
+        <div class="left floated left aligned ten wide column">
+          <h2 class="ui header">
+            Proxy Pool
+            <div class="sub header">Instances that connect without their own proxy are assigned the least-loaded proxy below and keep it on every reconnect.</div>
+          </h2>
+        </div>
+        <div class="right floated right aligned six wide column">
+          <button class="ui primary button" id="addProxyPoolButton">
+            <i class="plus icon"></i> Add Proxy
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="ui mb-4">
+      <div class="ui negative message hidden" id="proxyPoolError"></div>
+      <table class="ui celled table" id="proxy-pool-table">
+        <thead>
+          <tr>
+            <th>Label</th>
+            <th>Proxy URL</th>
+            <th>Devices</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="proxy-pool-body"></tbody>
       </table>
     </div>
   </div> 
@@ -475,7 +508,12 @@
       <div class="ui form">
         <div class="field" id="messageHistoryField">
           <label>History</label>
-          <input id="history" type="number" placeholder="0">
+          <input id="history" type="number" min="0" step="1" placeholder="0">
+        </div>
+        <div class="field">
+          <label>History requested on next pairing (days)</label>
+          <input id="historySyncDays" type="number" min="0" max="365" step="1" value="0">
+          <small>0 uses WhatsApp defaults. Save before starting a new pairing; an existing QR must be restarted. Availability depends on the phone.</small>
         </div>
       </div>
     </div>
@@ -657,6 +695,12 @@
           <small>Number of messages to store in history per chat for this instance. Set to 0 to disable message history.</small>
         </div>
 
+        <div class="field">
+          <label>History requested on pairing (days)</label>
+          <input type="number" name="days_to_sync_history" min="0" max="365" step="1" value="0">
+          <small>0 uses WhatsApp defaults. Separate from the number of messages retained per chat.</small>
+        </div>
+
         <!-- Proxy Configuration -->
         <h4 class="ui dividing header">Proxy Configuration (Optional)</h4>
         <div class="field">
@@ -809,6 +853,52 @@
     </div>
   </div>
 
+  <!-- Proxy Pool Modals -->
+  <div class="ui small modal" id="modalProxyPoolEntry"><i class="close icon"></i>
+    <div class="header" id="proxyPoolModalTitle">Add Proxy</div>
+    <div class="content">
+      <div class="ui negative message hidden" id="proxyPoolFormError"></div>
+      <form class="ui form" id="proxyPoolForm" onsubmit="return false;">
+        <div class="field">
+          <label>Label</label>
+          <input type="text" id="proxyPoolLabel" placeholder="residential-1">
+        </div>
+        <div class="required field">
+          <label>Proxy URL</label>
+          <input type="text" id="proxyPoolUrl" placeholder="socks5://user:pass@203.0.113.10:1080 or http://203.0.113.10:3128">
+          <small id="proxyPoolUrlHelp">Only http:// and socks5:// proxies are supported.</small>
+        </div>
+        <div class="required field">
+          <label>Max devices</label>
+          <input type="number" id="proxyPoolMaxDevices" min="1" value="1">
+          <small>How many instances may be assigned to this proxy.</small>
+        </div>
+        <div class="field">
+          <div class="ui toggle checkbox" id="proxyPoolEnabledToggle">
+            <input type="checkbox" id="proxyPoolEnabled" checked>
+            <label>Enabled</label>
+          </div>
+          <small>Disabled proxies keep their current instances but receive no new ones.</small>
+        </div>
+      </form>
+    </div>
+    <div class="actions">
+      <div class="ui cancel button secondary">Cancel</div>
+      <div class="ui positive right labeled icon button">Save<i class="checkmark icon"></i></div>
+    </div>
+  </div>
+
+  <div class="ui small modal" id="modalDeleteProxyPoolEntry">
+    <div class="header">Delete Proxy</div>
+    <div class="content">
+      <p>Are you sure you want to remove <b id="deleteProxyPoolLabel"></b> from the pool?</p>
+    </div>
+    <div class="actions">
+      <div class="ui negative button">No</div>
+      <div class="ui positive right labeled icon button">Yes<i class="checkmark icon"></i></div>
+    </div>
+  </div>
+
   <!-- User Modals -->
 
   <div class="ui modal" id="modalUserInfo"><i class="close icon"></i>
@@ -816,7 +906,9 @@
     <div class="content">
       <div class="ui message info hidden" id="userInfoContainer"></div>
       <div class="ui form">
-        <div class="field"><label>Phone</label><input id="userinfoinput" type="text" placeholder="Type phone number"></div>
+        <div class="field"><label for="userinfoinput">Phone or account JID</label><input id="userinfoinput" type="text" placeholder="5491112345678 or account@lid"></div>
+        <button type="button" class="ui teal button" id="getBusinessProfile">Get Business Profile</button>
+        <div class="ui message hidden" id="businessProfileContainer" role="status" aria-live="polite" style="overflow-wrap:anywhere"></div>
       </div>
     </div>
     <div class="actions">
@@ -848,6 +940,10 @@
       <div class="ui form">
         <div class="field"><label>Phone</label><input id="messagesendphone" type="text" placeholder="Type phone number"></div>
         <div class="field"><label>Message</label><textarea id="messagesendtext"></textarea></div>
+        <div class="field">
+          <div class="ui checkbox"><input type="checkbox" id="messageMentionAll" disabled><label for="messageMentionAll">Mention all group members</label></div>
+          <p id="mentionAllHelp">Enter a group JID ending in @g.us to enable this. Members are mentioned without adding phone numbers to the message.</p>
+        </div>
       </div>
     </div>
     <div class="actions">
@@ -1349,7 +1445,8 @@
 
   <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/fomantic-ui@2.9.4/dist/semantic.min.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=conversation-tools-1"></script>
   <script src="js/groups.js"></script>
+  <script src="js/proxypool.js?v=proxy-pool-4"></script>
 </body>
 </html>

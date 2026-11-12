@@ -24,7 +24,10 @@ import (
 	"fmt"
 	"io"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 )
@@ -313,18 +316,21 @@ func (ss *stdioServer) routeRequest(req *jsonRpcRequest) {
 	case "chat.send.contact":
 		httpMethod = "POST"
 		httpPath = "/chat/send/contact"
+	case "chat.poll.vote":
+		httpMethod = "POST"
+		httpPath = "/chat/poll/vote"
 	case "chat.send.poll":
 		httpMethod = "POST"
 		httpPath = "/chat/send/poll"
 	case "chat.send.buttons":
 		httpMethod = "POST"
 		httpPath = "/chat/send/buttons"
-	case "chat.send.list":
-		httpMethod = "POST"
-		httpPath = "/chat/send/list"
 	case "chat.send.carousel":
 		httpMethod = "POST"
 		httpPath = "/chat/send/carousel"
+	case "chat.send.list":
+		httpMethod = "POST"
+		httpPath = "/chat/send/list"
 	case "chat.send.edit":
 		httpMethod = "POST"
 		httpPath = "/chat/send/edit"
@@ -340,6 +346,30 @@ func (ss *stdioServer) routeRequest(req *jsonRpcRequest) {
 	case "chat.presence":
 		httpMethod = "POST"
 		httpPath = "/chat/presence"
+	case "labels.edit":
+		httpMethod = "POST"
+		httpPath = "/labels/edit"
+	case "labels.chat":
+		httpMethod = "POST"
+		httpPath = "/labels/chat"
+	case "labels.message":
+		httpMethod = "POST"
+		httpPath = "/labels/message"
+	case "chat.mute":
+		httpMethod = "POST"
+		httpPath = "/chat/mute"
+	case "chat.unread":
+		httpMethod = "POST"
+		httpPath = "/chat/unread"
+	case "chat.pinchat":
+		httpMethod = "POST"
+		httpPath = "/chat/pinchat"
+	case "chat.star":
+		httpMethod = "POST"
+		httpPath = "/chat/star"
+	case "chat.markplayed":
+		httpMethod = "POST"
+		httpPath = "/chat/markplayed"
 	case "chat.markread":
 		httpMethod = "POST"
 		httpPath = "/chat/markread"
@@ -358,6 +388,16 @@ func (ss *stdioServer) routeRequest(req *jsonRpcRequest) {
 	case "chat.download.document":
 		httpMethod = "POST"
 		httpPath = "/chat/downloaddocument"
+	case "chat.conversations", "chat.messages":
+		httpMethod = "GET"
+		httpPath = "/chat/" + strings.TrimPrefix(req.Method, "chat.")
+		query := url.Values{}
+		for _, key := range []string{"chat_jid", "limit", "offset", "before"} {
+			if value, ok := req.Params[key]; ok {
+				query.Set(key, fmt.Sprint(value))
+			}
+		}
+		httpPath += "?" + query.Encode()
 	case "chat.history":
 		httpMethod = "GET"
 		chatJID, ok := req.Params["chat_jid"].(string)
@@ -378,6 +418,9 @@ func (ss *stdioServer) routeRequest(req *jsonRpcRequest) {
 	case "user.presence":
 		httpMethod = "POST"
 		httpPath = "/user/presence"
+	case "user.business-profile":
+		httpMethod = "POST"
+		httpPath = "/user/business-profile"
 	case "user.info":
 		httpMethod = "POST"
 		httpPath = "/user/info"
@@ -449,6 +492,9 @@ func (ss *stdioServer) routeRequest(req *jsonRpcRequest) {
 	case "group.locked":
 		httpMethod = "POST"
 		httpPath = "/group/locked"
+	case "group.memberaddmode":
+		httpMethod = "POST"
+		httpPath = "/group/memberaddmode"
 	case "group.ephemeral":
 		httpMethod = "POST"
 		httpPath = "/group/ephemeral"
@@ -466,6 +512,15 @@ func (ss *stdioServer) routeRequest(req *jsonRpcRequest) {
 	case "newsletter.list":
 		httpMethod = "GET"
 		httpPath = "/newsletter/list"
+	case "newsletter.join":
+		httpMethod = "POST"
+		httpPath = "/newsletter/join"
+	case "newsletter.leave":
+		httpMethod = "POST"
+		httpPath = "/newsletter/leave"
+	case "newsletter.mute":
+		httpMethod = "POST"
+		httpPath = "/newsletter/mute"
 
 	// Webhook management
 	case "webhook.get":
@@ -493,7 +548,21 @@ func (ss *stdioServer) executeHTTPHandler(req *jsonRpcRequest, httpMethod, httpP
 	// Create a mock HTTP request
 	var body io.Reader
 	if req.Params != nil && len(req.Params) > 0 {
-		jsonParams, err := json.Marshal(req.Params)
+		// Strict endpoints accept authentication only in headers. Keep legacy
+		// payloads intact: admin user creation uses token as a data field.
+		strictPayload := false
+		switch httpPath {
+		case "/chat/mute", "/chat/unread", "/labels/edit", "/labels/chat", "/labels/message", "/chat/poll/vote", "/user/business-profile":
+			strictPayload = true
+		}
+		payload := make(map[string]interface{}, len(req.Params))
+		for key, value := range req.Params {
+			if strictPayload && (key == "token" || key == "adminToken") {
+				continue
+			}
+			payload[key] = value
+		}
+		jsonParams, err := json.Marshal(payload)
 		if err != nil {
 			ss.sendError(req.ID, 400, fmt.Sprintf("invalid params: %v", err))
 			return
@@ -582,6 +651,8 @@ func (ss *stdioServer) sendError(id ID, code int, errorMsg string) {
 	ss.writeResponse(response)
 }
 
+var stdioOutputMu sync.Mutex
+
 func (ss *stdioServer) writeResponse(response jsonRpcResponse) {
 	// Marshalled response as single line
 	responseBytes, err := json.Marshal(response)
@@ -603,7 +674,9 @@ func (ss *stdioServer) writeResponse(response jsonRpcResponse) {
 	}
 
 	// Write to stdout with newline
+	stdioOutputMu.Lock()
 	fmt.Fprintf(ss.stdout, "%s\n", string(responseBytes))
+	stdioOutputMu.Unlock()
 
 	// Log with appropriate fields based on response type
 	logEvent := log.Debug().Str("id", response.ID.String())
@@ -624,27 +697,38 @@ type jsonRpcNotification struct {
 }
 
 // SendNotification sends a JSON-RPC notification to stdout (webhooks in stdio mode)
-// This is thread-safe - os.Stdout writes are atomic at the OS level
+// Notifications and responses share a lock for complete JSON lines.
 func (s *server) SendNotification(method string, params map[string]interface{}) {
 	if s.mode != Stdio {
 		return
 	}
 
-	notification := jsonRpcNotification{
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  params,
+	notification := map[string]interface{}{"jsonrpc": "2.0", "method": method}
+	if len(params) > 0 {
+		notification["params"] = params
 	}
-
-	notificationBytes, err := json.Marshal(notification)
+	body, err := prepareMediaJSON(notification)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to marshal notification")
+		log.Error().Err(err).Msg("Failed to prepare notification")
 		return
 	}
+	defer body.Close()
+	if err = writeMediaNotification(os.Stdout, body); err != nil {
+		log.Error().Err(err).Msg("Failed to write notification")
+	}
+}
 
-	fmt.Fprintf(os.Stdout, "%s\n", string(notificationBytes))
-
-	log.Debug().
-		Str("method", method).
-		Msg("Sent stdio notification")
+func writeMediaNotification(w io.Writer, body *mediaFile) error {
+	reader, err := body.Open()
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	stdioOutputMu.Lock()
+	defer stdioOutputMu.Unlock()
+	if _, err = io.Copy(w, reader); err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, "\n")
+	return err
 }

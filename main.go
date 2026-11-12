@@ -16,12 +16,13 @@ import (
 	"syscall"
 	"time"
 
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
-	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/patrickmn/go-cache"
 	"github.com/rs/zerolog"
@@ -52,6 +53,8 @@ var (
 	skipMedia           = flag.Bool("skipmedia", false, "Do not attempt to download media in messages")
 	osName              = flag.String("osname", "Mac OS 10", "Connection OSName in Whatsapp")
 	platformType        = flag.String("platformtype", "DESKTOP", "Device platform type (DESKTOP, IPAD, ANDROID_TABLET, IOS_PHONE, ANDROID_PHONE, etc.)")
+	autoPresenceMode    = flag.String("autopresence", "available", "Automatic presence after connecting (available or unavailable)")
+	poolFallbackMode    = flag.String("proxypoolfallback", "block", "When every proxy pool entry is full: block (refuse to connect) or direct (connect without a proxy)")
 	colorOutput         = flag.Bool("color", false, "Enable colored output for console logs")
 	sslcert             = flag.String("sslcertificate", "", "SSL Certificate File")
 	sslprivkey          = flag.String("sslprivatekey", "", "SSL Certificate Private Key File")
@@ -63,7 +66,10 @@ var (
 	mode                = flag.String("mode", "http", "Server mode: http or stdio")
 	dataDir             = flag.String("datadir", "", "Data directory for database and session files (defaults to executable directory)")
 
+	socketRecoveryEnabled = flag.Bool("socketrecovery", true, "Recover sessions after closed socket send errors")
+
 	globalHMACKeyEncrypted []byte
+	automaticPresence      = types.PresenceAvailable
 
 	webhookRetryEnabled      = flag.Bool("webhookretry", true, "Enable webhook retry mechanism")
 	webhookRetryCount        = flag.Int("retrycount", 5, "Number of times to retry failed webhooks")
@@ -82,7 +88,18 @@ var (
 
 var privateIPBlocks []*net.IPNet
 
-const version = "1.0.7"
+const version = "1.0.9"
+
+func parseAutomaticPresence(value string) (types.Presence, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(types.PresenceAvailable):
+		return types.PresenceAvailable, nil
+	case string(types.PresenceUnavailable):
+		return types.PresenceUnavailable, nil
+	default:
+		return "", fmt.Errorf("invalid automatic presence %q: expected available or unavailable", value)
+	}
+}
 
 // killchannel maps a userID to its session goroutine's kill channel. It is
 // accessed from HTTP request goroutines (Connect/Disconnect/logout/delete) and
@@ -126,6 +143,7 @@ func signalKill(userID string) {
 		log.Debug().Str("userID", userID).Msg("signalKill: no kill channel registered (already cleaned up?)")
 		return
 	}
+	clientManager.stopSocketRecovery(userID, true)
 	select {
 	case ch <- true:
 	default:
@@ -207,6 +225,12 @@ func isPrivateOrLoopback(ip net.IP) bool {
 }
 
 func main() {
+	// Configure logging after loading .env, before emitting startup messages.
+	err := loadEnvAndConfigureLogging()
+	if err != nil {
+		log.Warn().Err(err).Msg("It was not possible to load the .env file (it may not exist).")
+	}
+
 	for _, cidr := range []string{
 		"127.0.0.0/8",    // IPv4 loopback
 		"10.0.0.0/8",     // RFC1918
@@ -224,12 +248,10 @@ func main() {
 		privateIPBlocks = append(privateIPBlocks, block)
 	}
 
-	err := godotenv.Load()
-	if err != nil {
-		log.Warn().Err(err).Msg("It was not possible to load the .env file (it may not exist).")
-	}
-
 	flag.Parse()
+	if _, err := getMediaStore(); err != nil {
+		log.Fatal().Err(err).Msg("Could not initialize media storage")
+	}
 
 	// Check for address in environment variable if flag is default or empty
 	if *address == "0.0.0.0" || *address == "" {
@@ -268,8 +290,8 @@ func main() {
 	}
 
 	log.Info().
-		Bool("use_proxy", *globalWebhookUseProxy).
-		Msg("Webhook Proxy Configured")
+		Bool("use_proxy_when_configured", *globalWebhookUseProxy).
+		Msg("Webhook proxy routing policy configured")
 
 	log.Info().
 		Bool("enabled", *webhookRetryEnabled).
@@ -278,7 +300,7 @@ func main() {
 		Str("queue", *webhookErrorQueueName).
 		Msg("Webhook Retry Configured")
 
-	// Novo bloco para sobrescrever o osName pelo ENV, se existir
+	// Override the OS name from the environment when configured.
 	if v := os.Getenv("SESSION_DEVICE_NAME"); v != "" {
 		*osName = v
 	}
@@ -287,6 +309,39 @@ func main() {
 	if v := os.Getenv("SESSION_PLATFORM_TYPE"); v != "" {
 		*platformType = v
 	}
+	// Whatsmeow also reads these global properties in QR/passkey pairing.
+	// Set the process-wide identity once, before any client goroutines start.
+	store.DeviceProps.PlatformType = getPlatformTypeEnum(*platformType)
+	store.DeviceProps.Os = osName
+
+	if v := os.Getenv("WUZAPI_AUTO_PRESENCE"); v != "" {
+		*autoPresenceMode = v
+	}
+
+	configuredPresence, err := parseAutomaticPresence(*autoPresenceMode)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid automatic session presence configuration")
+	}
+	automaticPresence = configuredPresence
+	log.Info().Str("presence", string(automaticPresence)).Msg("Automatic session presence configured")
+
+	if v := os.Getenv("WUZAPI_SOCKET_RECOVERY"); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Invalid WUZAPI_SOCKET_RECOVERY value")
+		}
+		*socketRecoveryEnabled = enabled
+	}
+
+	if v := os.Getenv("WUZAPI_PROXY_POOL_FALLBACK"); v != "" {
+		*poolFallbackMode = v
+	}
+	configuredFallback, err := parseProxyPoolFallback(*poolFallbackMode)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid proxy pool fallback configuration")
+	}
+	proxyPoolFallback = configuredFallback
+	log.Info().Str("fallback", string(proxyPoolFallback)).Msg("Proxy pool fallback configured")
 
 	if *versionFlag {
 		fmt.Printf("WuzAPI version %s\n", version)
@@ -361,7 +416,7 @@ func main() {
 				b[i] = charset[rand.Intn(len(charset))]
 			}
 			*adminToken = string(b)
-			log.Warn().Str("admin_token", *adminToken).Msg("No admin token provided, generated a random one")
+			log.Warn().Msg("No admin token provided, generated a temporary random one. Set WUZAPI_ADMIN_TOKEN or -admintoken to configure admin access.")
 		}
 	}
 
@@ -377,8 +432,8 @@ func main() {
 				b[i] = charset[rand.Intn(len(charset))]
 			}
 			*globalEncryptionKey = string(b)
-			log.Warn().Str("global_encryption_key", *globalEncryptionKey).Msg("No WUZAPI_GLOBAL_ENCRYPTION_KEY provided, generated a random one. " +
-				"SAVE THIS KEY TO YOUR .ENV FILE OR ALL ENCRYPTED DATA WILL BE LOST ON RESTART!")
+			log.Warn().Msg("No WUZAPI_GLOBAL_ENCRYPTION_KEY provided, generated a temporary random one. " +
+				"Configure a persistent WUZAPI_GLOBAL_ENCRYPTION_KEY before storing encrypted data; data encrypted with this temporary key cannot be recovered after restart.")
 		}
 	}
 
@@ -386,10 +441,10 @@ func main() {
 	if *globalWebhook == "" {
 		if v := os.Getenv("WUZAPI_GLOBAL_WEBHOOK"); v != "" {
 			*globalWebhook = v
-			log.Info().Str("global_webhook", v).Msg("Global webhook configured from environment variable")
+			log.Info().Msg("Global webhook configured from environment variable")
 		}
 	} else {
-		log.Info().Str("global_webhook", *globalWebhook).Msg("Global webhook configured from command line")
+		log.Info().Msg("Global webhook configured from command line")
 	}
 
 	// Check for global HMAC key in environment variable
@@ -405,7 +460,7 @@ func main() {
 				b[i] = charset[rand.Intn(len(charset))]
 			}
 			*globalHMACKey = string(b)
-			log.Warn().Str("global_hmac_key", *globalHMACKey).Msg("No WUZAPI_GLOBAL_HMAC_KEY provided, generated a random one")
+			log.Warn().Msg("No WUZAPI_GLOBAL_HMAC_KEY provided, generated a temporary random one. Set WUZAPI_GLOBAL_HMAC_KEY to configure webhook signature verification.")
 		}
 
 	} else {
@@ -523,6 +578,9 @@ func startHTTPMode(s *server) {
 			<-done
 			once.Do(func() {
 				log.Warn().Msg("Stopping server...")
+				if store, err := getMediaStore(); err == nil {
+					store.cancel()
+				}
 
 				// Graceful shutdown logic
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -533,6 +591,9 @@ func startHTTPMode(s *server) {
 					os.Exit(1)
 				}
 
+				if err := shutdownMedia(ctx); err != nil {
+					log.Error().Err(err).Msg("Media shutdown did not finish")
+				}
 				log.Info().Msg("Server Exited Properly")
 				os.Exit(0)
 			})
@@ -566,7 +627,13 @@ func startHTTPMode(s *server) {
 
 func startStdioMode(s *server) {
 	stdioServer := NewStdioServer(s)
-	if err := stdioServer.Start(); err != nil {
+	err := stdioServer.Start()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if shutdownErr := shutdownMedia(ctx); shutdownErr != nil {
+		log.Error().Err(shutdownErr).Msg("Media shutdown did not finish")
+	}
+	if err != nil {
 		log.Error().Err(err).Msg("Stdio server error")
 		os.Exit(1)
 	}

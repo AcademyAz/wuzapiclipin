@@ -12,6 +12,27 @@ The API supports two authentication methods:
 
 ---
 
+## Message destinations (`Phone`)
+
+For message send endpoints using `Phone`, the field accepts a destination identifier, not only a telephone number:
+
+- International phone digits, such as `5491155554444`. A single leading `+` and surrounding whitespace remain accepted. Do not include spaces, parentheses, or hyphens inside a bare number.
+- A full phone-number JID, such as `5491155554444@s.whatsapp.net`.
+- A full LID JID, such as `987654321012345@lid`. Use the complete JID received in an event; a LID is not a telephone number and may have no known phone mapping.
+- A full group JID, such as `120363000000000000@g.us`, where the endpoint supports groups. Endpoint-specific restrictions still apply (for example, carousels only accept direct account destinations).
+
+Full JIDs retain their existing routing semantics. Bare numeric identifiers use the session's cached PN/LID mappings; unknown values retain the phone-number fallback. If a bare identifier matches both a PN and a LID, specify `@s.whatsapp.net` or `@lid` explicitly. Keep identifiers as JSON strings to preserve leading zeroes and large values.
+
+The current WuzAPI `Phone` field does not resolve literal usernames (such as `@alice`) or Cloud API BSUIDs (such as `US.13491208655302741918`) into WhatsApp Web destinations. This does not prevent replying to an account with a hidden phone number: use the full chat JID received through the linked WhatsApp session, including `@lid` when provided. Do not manufacture a JID by appending a server suffix to a username or BSUID; this API has no supported conversion for those values. If only a username or a Cloud API BSUID is available, a supported identifier-resolution mechanism or the corresponding Cloud API integration is needed. Malformed destinations are rejected by message destination validation; validation does not verify that an account exists or that a message was delivered.
+
+The same rules apply to `params.Phone` for mapped stdio methods such as `chat.send.text`:
+
+```json
+{"jsonrpc":"2.0","id":"send-1","method":"chat.send.text","params":{"token":"YOUR_USER_TOKEN","Phone":"987654321012345@lid","Body":"Hello"}}
+```
+
+For replies, preserve the full chat JID supplied by the incoming event instead of stripping its suffix or requiring a telephone number. A successful send response is not a delivery receipt; use delivery/read events to track delivery.
+
 ## Admin Endpoints (User Management)
 
 The following admin-only endpoints are used to manage users in the system. All require the Authorization header with the admin token (WUZAPI_ADMIN_TOKEN).
@@ -127,6 +148,85 @@ Response:
 {
   "Details": "User deleted successfully"
 }
+```
+
+---
+
+## Proxy Pool
+
+The proxy pool lets an admin register proxies that are handed out automatically to sessions that have no proxy of their own. Each proxy carries at most `max_devices` sessions.
+
+* When a session calls [/session/connect](#user-content-connect) without a proxy, it is assigned the least-loaded enabled pool proxy that still has capacity. The choice is saved on the user (`proxy_url` and `proxy_pool_id`) and reused on every later connect, so a number keeps its IP.
+* If the pool has enabled proxies but all of them are full, connect fails with `503` instead of connecting through the host IP. Set `WUZAPI_PROXY_POOL_FALLBACK=direct` to connect without a proxy instead (nothing is saved, so the next connect tries the pool again).
+* Users with an explicit proxy (`proxyConfig` on create/edit, or [/session/proxy](#user-content-set-proxy)) are never touched by the pool. Setting or disabling an explicit proxy releases any pool slot the user held.
+* With an empty pool (or only disabled entries), behavior is unchanged.
+* Proxy passwords are masked in pool responses.
+
+### List Proxy Pool
+
+*GET /admin/proxy-pool*
+
+```
+curl -s -H 'Authorization: {{WUZAPI_ADMIN_TOKEN}}' http://localhost:8080/admin/proxy-pool
+```
+
+```json
+{
+  "code": 200,
+  "data": [
+    {
+      "id": "8b1171837e3035ecbe793409fb58baf2",
+      "label": "residential-1",
+      "proxy_url": "socks5://user:xxxxx@203.0.113.10:1080",
+      "max_devices": 2,
+      "enabled": true,
+      "assigned_count": 1
+    }
+  ],
+  "success": true
+}
+```
+
+### Add Proxy to Pool
+
+*POST /admin/proxy-pool*
+
+`proxy_url` must be `http://` or `socks5://`. `max_devices` defaults to 1 and `enabled` to true.
+
+```
+curl -s -X POST -H 'Authorization: {{WUZAPI_ADMIN_TOKEN}}' -H 'Content-Type: application/json' --data '{"label":"residential-1","proxy_url":"socks5://user:pass@203.0.113.10:1080","max_devices":2}' http://localhost:8080/admin/proxy-pool
+```
+
+### Edit Proxy in Pool
+
+*PUT /admin/proxy-pool/{id}*
+
+All fields are optional. Disabling an entry stops new assignments but keeps existing ones. `max_devices` cannot be set below the current `assigned_count`. Changing `proxy_url` also updates every session assigned to the entry; the new address is used on their next connect.
+
+```
+curl -s -X PUT -H 'Authorization: {{WUZAPI_ADMIN_TOKEN}}' -H 'Content-Type: application/json' --data '{"max_devices":3,"enabled":false}' http://localhost:8080/admin/proxy-pool/8b1171837e3035ecbe793409fb58baf2
+```
+
+### Delete Proxy from Pool
+
+*DELETE /admin/proxy-pool/{id}*
+
+Returns `409` while sessions are still assigned to the proxy; release them first.
+
+```
+curl -s -X DELETE -H 'Authorization: {{WUZAPI_ADMIN_TOKEN}}' http://localhost:8080/admin/proxy-pool/8b1171837e3035ecbe793409fb58baf2
+```
+
+### Release a User's Pool Proxy
+
+*POST /admin/users/{id}/proxy-pool/release*
+
+Frees the pool slot held by a disconnected session and clears its proxy. On its next connect the session is assigned a pool proxy again.
+
+Returns `409` while the session is starting, pairing, reconnecting, or shutting down. Disconnect the session and wait for shutdown to complete before releasing its slot. Changing a pool-assigned user's explicit proxy also requires shutdown to finish.
+
+```
+curl -s -X POST -H 'Authorization: {{WUZAPI_ADMIN_TOKEN}}' http://localhost:8080/admin/users/4e4942c7dee1deef99ab8fd9f7350de5/proxy-pool/release
 ```
 
 ---
@@ -341,6 +441,8 @@ Available message types to subscribe to are:
 * ReadReceipt
 * HistorySync
 * ChatPresence
+
+If the session has no proxy and the [proxy pool](#user-content-proxy-pool) is in use, a pool proxy is assigned before connecting. If every pool proxy is at capacity, the request fails with `503` (or connects without a proxy when `WUZAPI_PROXY_POOL_FALLBACK=direct`).
 
 If you set Immediate to false, the action will wait 10 seconds to verify a successful login. If Immediate is not set or set to true, it will return immedialty, but you will have to check shortly after the /session/status as your session might be disconnected shortly after started if the session was terminated previously via the phone/device.
 
@@ -805,8 +907,68 @@ Response:
 
 # Chat
 
-The following _chat_ endpoints are used to send messages or mark them as read or indicating composing/not composing presence. The sample response is listed only once, as it is the
-same for all message types.
+Chat endpoints support sending, deleting and editing messages, read receipts, and presence.
+
+## Delete a message
+
+*POST /chat/delete*
+
+`Phone` identifies the chat and `Id` identifies the original message. Omit the
+optional `SenderJID`, or send an empty string, to delete your own message:
+
+```json
+{
+  "Phone": "5491155553934",
+  "Id": "AABBCC11223344"
+}
+```
+
+To delete another participant's message, the connected WhatsApp account must be
+an administrator of the group. Use the full group JID as `Phone` and the original
+author's JID from the message event as `SenderJID`:
+
+```json
+{
+  "Phone": "120363000000000000@g.us",
+  "Id": "AABBCC11223344",
+  "SenderJID": "5491155553935@s.whatsapp.net"
+}
+```
+
+`SenderJID` accepts numeric phone-number JIDs (`@s.whatsapp.net`) and LIDs
+(`@lid`). Legacy `@c.us` is normalized to `@s.whatsapp.net`. Valid device/agent
+suffixes are removed. PN and LID are not automatically interconverted: use the
+identity provided by the original message. Supplying the account's own PN or LID
+also deletes an own message, including in a direct chat, without requiring group
+administrator privileges.
+
+Incomplete JIDs, bare numbers, whitespace, invalid device/agent suffixes, multiple
+`@` signs, and group/broadcast/newsletter sender JIDs return HTTP `400`. Specifying
+another sender outside a group also returns `400`. WhatsApp enforces the actual
+deletion permissions and applicable restrictions; local validation does not grant
+administrator privileges.
+
+A successful request retains the existing response format:
+
+```json
+{
+  "code": 200,
+  "data": {
+    "Details": "Deleted",
+    "Timestamp": 1700000000,
+    "Id": "AABBCC11223344"
+  },
+  "success": true
+}
+```
+
+In stdio mode, the same fields are supported by `chat.delete`, alongside the
+session's `token`:
+
+```json
+{"jsonrpc":"2.0","id":"delete-1","method":"chat.delete","params":{"token":"YOUR_USER_TOKEN","Phone":"120363000000000000@g.us","Id":"AABBCC11223344","SenderJID":"987654321@lid"}}
+```
+
 
 ## Send Text Message
 
@@ -865,6 +1027,94 @@ curl -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"
 
 ---
 
+## Send Carousel Message
+
+*POST /chat/send/carousel* — stdio: `chat.send.carousel`
+
+Sends one native horizontal carousel to a direct phone-number or LID chat.
+Each card contains an image, body text and buttons. Groups, broadcasts,
+newsletters and bots are not supported by this endpoint.
+
+Send the user token in the `Token` header:
+
+```sh
+curl -X POST http://localhost:8080/chat/send/carousel \
+  -H 'Token: YOUR_USER_TOKEN' -H 'Content-Type: application/json' \
+  --data @carousel.json
+```
+
+Example `carousel.json` (replace the image URLs with your own):
+
+```json
+{
+  "Phone": "15555550100",
+  "Id": "carousel-example-1",
+  "Body": "Choose a destination",
+  "Cards": [
+    {
+      "Body": "Summit",
+      "Image": "https://example.com/summit.jpg",
+      "Buttons": [{"type": "reply", "title": "Choose", "id": "summit"}]
+    },
+    {
+      "Body": "Coast",
+      "Image": "https://example.com/coast.png",
+      "Buttons": [{"type": "cta_url", "title": "Details", "url": "https://example.com/coast"}]
+    }
+  ]
+}
+```
+
+Supported input limits (application limits, not WhatsApp delivery guarantees):
+
+| Field | Supported values |
+| --- | --- |
+| `Phone` | Bare phone number or direct `@s.whatsapp.net` / `@lid` JID; existing cached PN/LID resolution applies |
+| `Id` | Optional; generated when omitted. At most 128 printable ASCII bytes, without whitespace |
+| `Body` | 1–1,024 characters, not only whitespace |
+| `Cards` | 2–10 ordered entries |
+| Card `Body` | 1–160 characters, not only whitespace |
+| Card `Image` | JPEG/PNG data URL or HTTP(S) URL; 16 MiB total decoded/source image bytes per request, at most 4,096 pixels per side and 16 megapixels |
+| Card `Buttons` | 1–3 per card; `title` is 1–20 characters without controls |
+| `reply` button | Default when type is omitted or empty; explicit `id` of 1–200 characters without controls, unique across all cards |
+| `cta_url` button | Absolute HTTP(S) `url`, at most 2,048 bytes, without credentials, controls or whitespace |
+| `cta_call` button | `phone_number`: 6–15 digits with an optional leading `+` |
+
+Use only the action fields for the selected button type. Unsupported fields,
+actions and trailing JSON are rejected; cards and button labels are never
+silently dropped or truncated. The HTTP JSON body is limited to 24 MiB.
+Stdio retains its existing 512-KiB line limit, so prefer image URLs there.
+
+All cards and image contents are validated before uploading any image. If an
+upload fails, no final message is sent, although earlier media uploads may
+already exist. Success creates one outgoing history entry (when history is
+enabled) and one sent-message event containing the full carousel.
+
+Input errors return 400, oversized JSON returns 413, and local IO/upload
+failures return 500 with a card-scoped error. Canceled or expired preparation
+returns 503/504. An upload failure says `message not sent`; only errors after
+dispatch say `delivery unconfirmed`. Never treat those two outcomes as equivalent.
+
+The response uses the ordinary send envelope:
+
+```json
+{"code":200,"data":{"Details":"Sent","Timestamp":1700000000,"Id":"carousel-example-1"},"success":true}
+```
+
+**Delivery and retry limitations:** `Sent` means WhatsApp acknowledged the
+transport, not that a recipient displayed or read the cards. The pinned
+whatsmeow version does not preserve the interactive `AdditionalNodes` when
+answering a recipient's retry receipt, so retransmitted carousels may not
+render. Client rendering and recovery require real-device verification.
+
+Preparation has a 45-second budget, followed by a detached 60-second dispatch
+budget so HTTP cancellation after dispatch does not discard a successful ACK.
+These are not an end-to-end latency guarantee: whatsmeow's internal send lock
+can remain queued beyond the HTTP write deadline. A timeout or error after
+dispatch is ambiguous; the endpoint never automatically replays it. Supply an
+`Id` for correlation and reconcile the outcome before another attempt. Reusing
+an `Id` does not provide idempotency and does not replace an existing history row.
+
 ## Send Audio Message
 
 Sends an Audio message. Audio must be in Opus format and base64 encoded in embedded format.
@@ -895,7 +1145,9 @@ curl -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"
 
 ## Send Document Message
 
-Sends a Document message. Any mime type can be attached. A FileName must be supplied in the request body. The Document must be passed as octet-stream in base64 embedded format.
+Sends a Document message. Any mime type can be attached. A FileName must be supplied in the request body. The Document must be passed in base64 embedded format or as an HTTP URL.
+
+The optional MimeType field sets the document type sent to WhatsApp. When omitted, an explicitly declared data URL type or HTTP Content-Type is used. If that type is missing, invalid, `application/octet-stream`, or `binary/octet-stream`, the type is taken from the FileName extension and then from the file contents. A data URL without an explicit type (such as `data:;base64,...`) does not force `text/plain`. An explicit MimeType always takes precedence.
 
 Endpoint: _/chat/send/document_
 
@@ -1011,8 +1263,10 @@ curl -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"
 
 Subscribes to a contact's presence updates (online/offline and last seen). After
 subscribing, your configured webhook receives `Presence` events for that contact. You
-should be online yourself to receive presence (wuzapi sends an available presence on
-connect). Whether `last_seen` is available depends on the contact's privacy settings.
+should be online yourself to receive presence. By default WuzAPI sends an available
+presence on connect. When `WUZAPI_AUTO_PRESENCE=unavailable` is configured to preserve
+primary-phone push notifications, set your global presence to available before
+subscribing. Whether `last_seen` is available depends on the contact's privacy settings.
 
 endpoint: _/user/presence/subscribe_
 
@@ -1071,6 +1325,91 @@ method: **POST**
 ```
 curl -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"Phone":"5491155554444","Body":"❤️","Id":"me:069EDE53E81CB5A4773587FB96CB3ED3"}' http://localhost:8080/chat/react
 ```
+
+---
+
+## Pin / Unpin a message
+
+Pins or unpins an existing message in an individual chat or group. The same endpoint handles both: send `Pin: true` (the default) to pin and `Pin: false` to unpin.
+
+endpoint: _/chat/pin_
+
+method: **POST**
+
+Required headers:
+
+```
+Token: <USER_TOKEN>
+Content-Type: application/json
+```
+
+### Request body
+
+| Field | Required | Type | Description |
+|---|---|---|---|
+| `Chat` | Yes | string | Target chat JID. For groups, the group JID ending in `@g.us`. |
+| `Sender` | Required for groups | string | JID of the original message sender. Required for group messages because the message key includes the participant. Optional for one-to-one chats. |
+| `Id` | Yes | string | WhatsApp message ID of the message to pin or unpin. |
+| `DurationSeconds` | No | integer | How long the message stays pinned. Defaults to `604800`. Only used when pinning. |
+| `Pin` | No | boolean | `true` pins the message, `false` unpins it. Defaults to `true`. |
+
+### Allowed durations
+
+| Duration | Seconds |
+|---|---|
+| 24 hours | `86400` |
+| 7 days | `604800` (default) |
+| 30 days | `2592000` |
+
+When `Pin` is `false`, `DurationSeconds` is ignored.
+
+### Pin a group message for 7 days
+
+```
+curl -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"Chat":"120363012345678901@g.us","Sender":"5491123456789@s.whatsapp.net","Id":"3EB0ABCDEF1234567890","DurationSeconds":604800,"Pin":true}' http://localhost:8080/chat/pin
+```
+
+### Pin a group message for 24 hours
+
+```
+curl -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"Chat":"120363012345678901@g.us","Sender":"5491123456789@s.whatsapp.net","Id":"3EB0ABCDEF1234567890","DurationSeconds":86400,"Pin":true}' http://localhost:8080/chat/pin
+```
+
+### Unpin a group message
+
+```
+curl -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"Chat":"120363012345678901@g.us","Sender":"5491123456789@s.whatsapp.net","Id":"3EB0ABCDEF1234567890","Pin":false}' http://localhost:8080/chat/pin
+```
+
+### Example responses
+
+Pin success:
+
+```json
+{
+  "Details": "Message pinned",
+  "Chat": "120363012345678901@g.us",
+  "Id": "3EB0ABCDEF1234567890",
+  "DurationSeconds": 604800,
+  "Timestamp": "2026-06-18T12:34:56Z"
+}
+```
+
+Unpin success:
+
+```json
+{
+  "Details": "Message unpinned",
+  "Chat": "120363012345678901@g.us",
+  "Id": "3EB0ABCDEF1234567890",
+  "Timestamp": "2026-06-18T12:34:56Z"
+}
+```
+
+### Notes
+
+- For group messages the `Sender` field is mandatory and must be the JID of the original message sender. If it is wrong or missing, WhatsApp may ignore the pin.
+- The linked account must have permission to pin in the target group (if the group restricts pinning to admins, the account must be an admin). The transport may report success even when WhatsApp silently ignores an unauthorized pin.
 
 ---
 
@@ -1359,6 +1698,12 @@ method: **POST**
 curl -s -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' -d '{"name":"My New Group","participants":["5491155553934","5491155553935"]}' http://localhost:8080/group/create 
 ```
 
+Optionally, set who can add participants with `memberaddmode`: `"admin_add"` (only admins) or `"all_member_add"` (any participant). When omitted, whatsmeow's default applies (`all_member_add`).
+
+```
+curl -s -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' -d '{"name":"My New Group","participants":["5491155553934"],"memberaddmode":"admin_add"}' http://localhost:8080/group/create 
+```
+
 Response:
 
 ```json
@@ -1407,6 +1752,32 @@ Response:
   "code": 200,
   "data": {
     "Details": "Group locked setting updated successfully"
+  },
+  "success": true
+}
+```
+
+---
+
+## Set group member add mode
+
+Configures who can add participants to the group: only admins (`admin_add`) or any participant (`all_member_add`)
+
+endpoint: _/group/memberaddmode_
+
+method: **POST**
+
+```
+curl -s -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' -d '{"groupjid":"120362023605733675@g.us","mode":"admin_add"}' http://localhost:8080/group/memberaddmode 
+```
+
+Response:
+
+```json
+{
+  "code": 200,
+  "data": {
+    "Details": "Group member add mode updated successfully"
   },
   "success": true
 }
@@ -1867,3 +2238,185 @@ Content-Type: application/json
 - The `form` mode ensures compatibility with legacy or older webhook systems.
 - The `json` mode is recommended for modern integrations and easier backend parsing.
 - If you do not set the variable, the system will use `form` mode by default.
+
+## Mark audio as played
+
+`POST /chat/markplayed` (stdio: `chat.markplayed`) sends a played receipt for
+incoming audio/voice notes. Uses the same payload as `/chat/markread`:
+
+```json
+{"Id":["MESSAGE_ID"],"ChatPhone":"5491112345678@s.whatsapp.net"}
+```
+
+For group messages, set `ChatPhone` to the group JID and supply `SenderPhone`.
+All IDs in one request must belong to that chat and sender. This sends receipt
+metadata; it does not play audio or verify its media type locally.
+
+## Star or unstar a message
+
+`POST /chat/star` (stdio: `chat.star`):
+
+```json
+{"Chat":"120363407915251919@g.us","Sender":"5491112345678@s.whatsapp.net","Id":"MESSAGE_ID","FromMe":false,"Star":true}
+```
+
+`Star` and `FromMe` must be explicitly supplied. Set `Star:false` to unstar.
+`Sender` is required for groups and identifies the original message author;
+for direct chats it defaults to `Chat`. Use the exact message ID and author
+JID (including LID when applicable). This updates WhatsApp's synchronized
+starred-message state.
+
+## Pin or unpin a chat conversation
+
+`POST /chat/pinchat` (stdio: `chat.pinchat`) pins a conversation in WhatsApp's
+chat list. The existing `/chat/pin` endpoint pins an individual message.
+
+```json
+{"Chat":"5491112345678@s.whatsapp.net","Pin":true}
+```
+
+`Pin` must be explicitly supplied; use `false` to unpin. Direct chats (phone or
+LID JIDs) and group chats are supported. WhatsApp applies its own pin limits.
+
+## Conversation mute and unread state
+
+These endpoints update WhatsApp's synchronized conversation settings. They do
+not filter WuzAPI webhooks or change your application's notifications.
+
+- `POST /chat/mute` (stdio `chat.mute`):
+  `{"Chat":"123@g.us","Mute":true,"DurationSeconds":3600}`.
+  Omit duration or use zero for indefinite mute; `Mute:false` unmutes and
+  requires zero/omitted duration. Negative or overflowing durations are rejected.
+- `POST /chat/unread` (stdio `chat.unread`):
+  `{"Chat":"123@g.us","Unread":true}`. Use false to clear the unread flag.
+  This changes the conversation flag; use `/chat/markread` for message receipts.
+
+Both require a user token and explicit boolean, support individual phone/LID and
+group chats, and return the normal success envelope with `Details: Updated`.
+No local persistence or migration is added. Unknown fields and trailing JSON
+are rejected.
+
+## WhatsApp labels
+
+Authenticated label operations update WhatsApp app state (account/client support
+is determined by WhatsApp, especially for Business accounts):
+
+| POST endpoint | Stdio method | Payload example |
+|---|---|---|
+| `/labels/edit` | `labels.edit` | `{"LabelID":"7","Name":"Customer","Color":3,"Deleted":false}` |
+| `/labels/chat` | `labels.chat` | `{"Chat":"123@g.us","LabelID":"7","Labeled":true}` |
+| `/labels/message` | `labels.message` | `{"Chat":"123@g.us","LabelID":"7","Id":"MESSAGE_ID","Labeled":true}` |
+
+Use `Deleted:true` with `LabelID` to delete a label; use `Labeled:false` to remove
+an association. All booleans must be explicit. Label IDs are canonical unsigned
+32-bit decimal strings. Callers choose an unused ID to create a label and reuse
+an existing ID to edit it; WuzAPI does not allocate IDs. Creation/edit requires
+a nonblank name (at most 100 characters) and palette color 0–19.
+
+These are write endpoints; no label catalog, listing, or local label database
+is introduced. Applications must retain IDs and coordinate edits with other
+clients. Success returns `Details: Updated`; failures use the normal error
+envelope. Unknown fields and trailing JSON are rejected.
+
+## Vote in a poll
+
+`POST /chat/poll/vote` (stdio `chat.poll.vote`), authenticated with the session's
+user token:
+
+```json
+{"Chat":"123@g.us","Sender":"456@lid","Id":"POLL_MESSAGE_ID","FromMe":false,"Options":["Yes"]}
+```
+
+Supply the original poll's exact chat, creator (`Sender`), message ID and
+`FromMe` flag from its message metadata. `FromMe` describes the poll creator,
+not the vote sender. Use the original PN/LID JIDs; do not substitute another
+address for the same account. `Options` contains exact, distinct option names;
+an explicit empty array retracts the vote. Missing/null options are rejected.
+
+Whatsmeow must have the original poll's message secret in this session's store.
+If unavailable, vote construction fails and nothing is sent. WuzAPI does not
+fetch missing secrets or validate options against a retained poll catalog;
+the caller must respect the poll's available options and selection limit.
+Success returns `Id` (the new vote message ID), Unix `Timestamp`, and
+`Details: Sent`. Failed sends are not automatically replayed because their
+outcome may be uncertain. No new table is required.
+
+## Business profile lookup
+
+`POST /user/business-profile` (stdio `user.business-profile`) requires a user
+token and a single individual account:
+
+```json
+{"Phone":"5491112345678"}
+```
+
+International numbers without `+`, phone JIDs (`@s.whatsapp.net`), and LID JIDs
+(`@lid`) are accepted. Groups/channels and missing identifiers are rejected.
+The lookup uses the authenticated user's WhatsApp session.
+
+Success returns the Whatsmeow business profile inside the standard `data`
+envelope: `JID`, `Address`, `Email`, `Categories`, `ProfileOptions`,
+`BusinessHoursTimeZone`, and `BusinessHours`. Fields may be empty when WhatsApp
+does not provide them. No local cache or database table is added. A nil result
+returns 404; upstream lookup failures use the standard 500 error envelope,
+including when WhatsApp cannot provide a profile for a non-business account.
+Unknown fields and trailing JSON are rejected.
+
+## Web client history and voice recordings
+
+The bundled Svelte messaging client is available at `/client/`. See
+[the client guide](webclient/README.md) for setup, polling, media requirements,
+and history availability. All three endpoints below use the normal user-token
+header. Existing history and JSON audio endpoints are unchanged.
+
+### List the current user's conversations
+
+`GET /chat/conversations?limit=100&offset=0`
+
+Returns the latest stored message summary for each chat belonging to the
+current user. `limit` is 1–200 (default 100); `offset` is nonnegative. The response
+`data` contains `chats`, `has_more`, and `next_offset`. Each summary includes
+`chat_jid`, `message_id`, `sender_jid`, `timestamp`, `message_type`, and
+`text_content`. No other user's chat index is included. History must be enabled
+(501 otherwise); empty lists are returned as `[]`. Responses are not cacheable.
+Stdio method: `chat.conversations`, with optional `limit` and `offset` params.
+
+### Read a page of stored messages
+
+`GET /chat/messages?chat_jid=777%40lid&limit=50&before=123`
+
+`chat_jid` is required. `limit` is 1–100 (default 50). Omit `before` for the newest
+page; use the returned `next_before` as `before` to load older messages. The
+response `data` contains `messages` (the existing history message format),
+`has_more`, and `next_before`. Messages sort by timestamp descending, then row ID
+descending, including when timestamps are equal. Pagination anchors must belong
+to the current user and chat. A missing/pruned cursor returns 404; refresh the
+chat to start again. History must be enabled (501 otherwise). Responses use
+`Cache-Control: no-store`.
+
+Stdio method: `chat.messages`, with `chat_jid`, optional `limit`, and optional
+`before`. This endpoint reads local history; it does not ask WhatsApp to recover
+messages. Use the existing `/session/history` request for phone-side recovery.
+
+### Send a browser voice recording
+
+`POST /chat/send/voice` (`multipart/form-data`)
+
+Fields: `Phone` (destination), `Audio` (recording file), optional `Seconds`
+(duration metadata, 0–300), and optional `Id` (message ID). Accepts up to 16 MiB of input; converts audio to mono 48 kHz OGG/Opus at
+24 kbit/s with FFmpeg/libopus, capped at five minutes. Conversion has a 45-second
+timeout. The existing `/chat/send/audio` handler then sends the result with
+`ptt: true`. Success has the normal audio `Details`, `Timestamp`, and `Id` data.
+Malformed/oversized uploads return 400, conversion failures return 422, and
+session/send failures use the existing audio errors. Converted temporary files
+are removed after the request.
+
+```sh
+curl -X POST http://localhost:8080/chat/send/voice \
+  -H 'token: YOUR_USER_TOKEN' \
+  -F 'Phone=777@lid' -F 'Audio=@recording.webm'
+```
+
+This multipart endpoint is HTTP-only. Stdio clients continue to send prepared
+audio through `chat.send.audio`. Microphone capture in the web client requires
+HTTPS or localhost.
