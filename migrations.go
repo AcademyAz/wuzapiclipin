@@ -102,6 +102,12 @@ var migrations = []Migration{
 		UpSQL: `ALTER TABLE users ADD COLUMN IF NOT EXISTS device_jid TEXT NOT NULL DEFAULT '';
         CREATE UNIQUE INDEX IF NOT EXISTS idx_users_device_jid ON users(device_jid) WHERE device_jid <> '';`,
 	},
+	{
+		// IDs abaixo de 100 são do projeto original; os do fork começam em 100 para não colidir.
+		ID:    100,
+		Name:  "add_skip_groups",
+		UpSQL: `ALTER TABLE users ADD COLUMN IF NOT EXISTS skip_groups BOOLEAN DEFAULT FALSE;`,
+	},
 }
 
 const addProxyPoolSQL = `
@@ -592,6 +598,12 @@ func applyMigration(db *sqlx.DB, migration Migration) error {
 	} else if migration.ID == 10 || migration.ID == 12 {
 		if db.DriverName() == "sqlite" {
 			err = addColumnIfNotExistsSQLite(tx, "users", "webhook_use_proxy", "BOOLEAN DEFAULT 1")
+		} else {
+			_, err = tx.Exec(migration.UpSQL)
+		}
+	} else if migration.ID == 100 {
+		if db.DriverName() == "sqlite" {
+			err = addColumnIfNotExistsSQLite(tx, "users", "skip_groups", "BOOLEAN DEFAULT 0")
 		} else {
 			_, err = tx.Exec(migration.UpSQL)
 		}
