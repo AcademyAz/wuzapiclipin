@@ -80,6 +80,11 @@ var migrations = []Migration{
 		Name:  "add_webhook_use_proxy",
 		UpSQL: addWebhookUseProxySQL,
 	},
+	{
+		ID:    11,
+		Name:  "add_skip_groups",
+		UpSQL: addSkipGroupsSQL,
+	},
 }
 
 const changeIDToStringSQL = `
@@ -240,6 +245,18 @@ DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'webhook_use_proxy') THEN
         ALTER TABLE users ADD COLUMN webhook_use_proxy BOOLEAN DEFAULT TRUE;
+    END IF;
+END $$;
+
+-- SQLite version (handled in code)
+`
+
+const addSkipGroupsSQL = `
+-- PostgreSQL version
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'skip_groups') THEN
+        ALTER TABLE users ADD COLUMN skip_groups BOOLEAN DEFAULT FALSE;
     END IF;
 END $$;
 
@@ -476,6 +493,12 @@ func applyMigration(db *sqlx.DB, migration Migration) error {
 	} else if migration.ID == 10 {
 		if db.DriverName() == "sqlite" {
 			err = addColumnIfNotExistsSQLite(tx, "users", "webhook_use_proxy", "BOOLEAN DEFAULT 1")
+		} else {
+			_, err = tx.Exec(migration.UpSQL)
+		}
+	} else if migration.ID == 11 {
+		if db.DriverName() == "sqlite" {
+			err = addColumnIfNotExistsSQLite(tx, "users", "skip_groups", "BOOLEAN DEFAULT 0")
 		} else {
 			_, err = tx.Exec(migration.UpSQL)
 		}

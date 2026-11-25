@@ -96,6 +96,8 @@ func (s *server) routes() {
 
 	s.router.Handle("/session/proxy", c.Then(s.SetProxy())).Methods("POST")
 	s.router.Handle("/session/history", c.Then(s.SetHistory())).Methods("POST")
+	s.router.Handle("/session/groups", c.Then(s.SetSkipGroups())).Methods("POST")
+	s.router.Handle("/session/groups", c.Then(s.GetSkipGroups())).Methods("GET")
 
 	s.router.Handle("/session/s3/config", c.Then(s.ConfigureS3())).Methods("POST")
 	s.router.Handle("/session/s3/config", c.Then(s.GetS3Config())).Methods("GET")
