@@ -962,6 +962,11 @@ func (mycli *MyClient) myEventHandler(rawEvt interface{}) {
 		return
 	case *events.Message:
 
+		// Sessions configured with skip_groups never deliver group or broadcast messages.
+		if evt.Info.IsGroup && skipGroupsEnabled(mycli.db, txtid) {
+			return
+		}
+
 		var s3Config struct {
 			Enabled       string `db:"s3_enabled"`
 			MediaDelivery string `db:"media_delivery"`

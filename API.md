@@ -485,6 +485,26 @@ Response:
 
 ---
 
+## Ignore group messages
+
+When enabled, messages from groups and broadcast lists are dropped for this session: they are not sent to the webhook, not saved to history and their media is not downloaded. It can also be set when creating the user with `"skipGroups": true` in `POST /admin/users`. Default: `false`.
+
+Endpoint: _/session/groups_
+
+Method: **POST** (set) or **GET** (read)
+
+```
+curl -s -X POST -H 'Token: 1234ABCD' -H 'Content-Type: application/json' --data '{"skip_groups":true}' http://localhost:8080/session/groups
+```
+
+Response:
+
+```json
+{"code":200,"data":{"Details":"Group messages configuration saved","skip_groups":true},"success":true}
+```
+
+---
+
 ## User
 
 The following _user_ endpoints are used to gather information about Whatsapp users.
