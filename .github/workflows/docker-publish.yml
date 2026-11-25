@@ -14,7 +14,9 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     environment: DOCKER
-    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
+    # Publica a imagem asternic/wuzapi no Docker Hub do projeto original. No fork não há essas credenciais
+    # e o deploy é feito pelo Dokploy compilando o repositório (ver DOKPLOY.md).
+    if: github.repository == 'asternic/wuzapi' && (github.event_name != 'pull_request' || github.event.pull_request.merged == true)
 
     steps:
       - name: Check out the repo
